@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Photo booth dengan gesture control — peace untuk capture, fist untuk blur">
+<title>Gesture Booth</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --accent: #ff3366; --bg: #0a0a0f; --panel: #161620; }
+  body {
+    background: var(--bg); color: #fff;
+    font-family: -apple-system, system-ui, sans-serif;
+    overflow: hidden; height: 100dvh;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  #stage {
+    position: relative; width: 100%; max-width: 640px; aspect-ratio: 4/3;
+    margin: 0 auto; flex-shrink: 0;
+  }
+  #video, #canvas { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; }
+  #video { transform: scaleX(-1); }
+  #canvas { transform: scaleX(-1); pointer-events: none; }
+  #countdown {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    font-size: 8rem; font-weight: 900; color: var(--accent);
+    text-shadow: 0 0 40px rgba(255,51,102,.6); z-index: 10;
+  }
+  #flash {
+    position: absolute; inset: 0; background: #fff;
+    opacity: 0; pointer-events: none; z-index: 20;
+    transition: opacity .15s;
+  }
+  #hud {
+    position: absolute; top: 8px; left: 8px; right: 8px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    z-index: 10; pointer-events: none; font-size: 12px;
+  }
+  #gesture-label {
+    background: var(--panel); padding: 6px 14px; border-radius: 20px;
+    font-weight: 600; letter-spacing: .5px;
+  }
+  #status {
+    background: var(--panel); padding: 6px 14px; border-radius: 20px;
+  }
+  #controls {
+    display: flex; gap: 8px; padding: 12px; justify-content: center;
+    flex-wrap: wrap;
+  }
+  #controls button {
+    background: var(--panel); border: 1px solid #333;
+    color: #fff; padding: 10px 20px; border-radius: 12px;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all .2s;
+  }
+  #controls button:hover { border-color: var(--accent); }
+  #controls button.primary { background: var(--accent); border-color: var(--accent); }
+  #gallery {
+    display: flex; gap: 6px; padding: 8px; overflow-x: auto;
+    max-width: 100%; flex-shrink: 0;
+  }
+  #gallery img {
+    height: 72px; border-radius: 8px; cursor: pointer;
+    border: 2px solid transparent; transition: border-color .2s;
+  }
+  #gallery img:hover { border-color: var(--accent); }
+  #hint {
+    text-align: center; padding: 4px 16px 8px;
+    font-size: 13px; color: #888; line-height: 1.6;
+  }
+  #hint b { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="flash"></div>
+  <div id="countdown">3</div>
+  <div id="hud">
+    <span id="gesture-label">—</span>
+    <span id="status">●</span>
+  </div>
+</div>
+
+<div id="hint">
+  <b>✌️ Peace</b> = capture photo &nbsp; <b>✊ Fist</b> = blur privacy &nbsp; <b>✋ Open Palm</b> = toggle filter
+</div>
+
+<div id="controls">
+  <button class="primary" id="btn-start">Start Camera</button>
+  <button id="btn-capture">Capture</button>
+  <button id="btn-blur">Blur</button>
+  <button id="btn-filter">Filter: Off</button>
+  <button id="btn-download">Download All</button>
+</div>
+
+<div id="gallery"></div>
+
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const countdownEl = document.getElementById('countdown');
+const flashEl = document.getElementById('flash');
+const gestureLabel = document.getElementById('gesture-label');
+const statusEl = document.getElementById('status');
+const gallery = document.getElementById('gallery');
+const btnStart = document.getElementById('btn-start');
+const btnCapture = document.getElementById('btn-capture');
+const btnBlur = document.getElementById('btn-blur');
+const btnFilter = document.getElementById('btn-filter');
+const btnDownload = document.getElementById('btn-download');
+
+let camera = null;
+let hands = null;
+let running = false;
+let blurred = false;
+let filterMode = 0; // 0=off,1=grayscale,2=sepia,3=invert
+const FILTER_NAMES = ['Off', 'Grayscale', 'Sepia', 'Invert'];
+const FILTER_CSS = ['none', 'grayscale(1)', 'sepia(1)', 'invert(1)'];
+let gallery_photos = [];
+let lastGesture = '';
+let gestureStableCount = 0;
+let capturing = false;
+
+// --- Gesture detection from landmarks ---
+function fingersUp(lm) {
+  // lm: array of {x,y} normalized, 21 points
+  const tips = [4, 8, 12, 16, 20];
+  const pips = [3, 6, 10, 14, 18];
+  const wrist = lm[0];
+  const result = [];
+
+  // Thumb: check x distance from wrist (mirror-aware)
+  const thumbTip = lm[4], thumbIp = lm[3];
+  const distThumb = Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y);
+  const distIp = Math.hypot(thumbIp.x - wrist.x, thumbIp.y - wrist.y);
+  result.push(distThumb > distIp ? 1 : 0);
+
+  // Other fingers: tip y above pip y (lower y = higher up)
+  for (let i = 1; i < 5; i++) {
+    result.push(lm[tips[i]].y < lm[pips[i]].y ? 1 : 0);
+  }
+  return result; // [thumb, index, middle, ring, pinky]
+}
+
+function classifyGesture(fingers) {
+  const [t, i, m, r, p] = fingers;
+  if (!i && !m && !r && !p) return 'Fist';
+  if (i && m && !r && !p && !t) return 'Peace';
+  if (i && m && r && p && t) return 'OpenPalm';
+  if (i && !m && !r && !p) return 'Point';
+  if (!i && m && !r && !p) return 'MiddleFinger';
+  return 'Unknown';
+}
+
+function onResults(results) {
+  if (!running) return;
+
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw landmarks
+  let gesture = 'NoHand';
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const lm = results.multiHandLandmarks[0];
+    gesture = classifyGesture(fingersUp(lm));
+    drawLandmarks(lm);
+  }
+
+  // Stabilize gesture (need 3 consecutive frames same)
+  if (gesture === lastGesture) {
+    gestureStableCount++;
+  } else {
+    lastGesture = gesture;
+    gestureStableCount = 1;
+  }
+
+  gestureLabel.textContent = gesture === 'NoHand' ? '✋ Show hand' : gesture;
+
+  // Apply filter to video element
+  video.style.filter = FILTER_CSS[filterMode];
+
+  // Gesture actions (needs 4 stable frames ~0.13s)
+  if (gestureStableCount === 4 && !capturing) {
+    if (gesture === 'Peace') {
+      startCountdown();
+    } else if (gesture === 'Fist') {
+      toggleBlur();
+    } else if (gesture === 'OpenPalm') {
+      cycleFilter();
+    }
+  }
+
+  // Blur overlay
+  if (blurred) {
+    video.style.filter = 'blur(20px)';
+    canvas.style.filter = 'blur(20px)';
+  } else {
+    canvas.style.filter = 'none';
+  }
+
+  ctx.restore();
+}
+
+function drawLandmarks(lm) {
+  const w = canvas.width, h = canvas.height;
+  const connections = [
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [5,9],[9,10],[10,11],[11,12],
+    [9,13],[13,14],[14,15],[15,16],
+    [13,17],[17,18],[18,19],[19,20],
+    [0,17]
+  ];
+
+  ctx.strokeStyle = 'rgba(255,51,102,0.6)';
+  ctx.lineWidth = 3;
+  for (const [a, b] of connections) {
+    ctx.beginPath();
+    ctx.moveTo(lm[a].x * w, lm[a].y * h);
+    ctx.lineTo(lm[b].x * w, lm[b].y * h);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = '#ff3366';
+  for (const p of lm) {
+    ctx.beginPath();
+    ctx.arc(p.x * w, p.y * h, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Highlight fingertips
+  ctx.fillStyle = '#fff';
+  for (const t of [4, 8, 12, 16, 20]) {
+    ctx.beginPath();
+    ctx.arc(lm[t].x * w, lm[t].y * h, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// --- Countdown + capture ---
+function startCountdown() {
+  if (capturing) return;
+  capturing = true;
+  let n = 3;
+  countdownEl.textContent = n;
+  countdownEl.style.display = 'flex';
+
+  const tick = () => {
+    n--;
+    if (n > 0) {
+      countdownEl.textContent = n;
+      setTimeout(tick, 800);
+    } else {
+      countdownEl.style.display = 'none';
+      capturePhoto();
+      capturing = false;
+    }
+  };
+  setTimeout(tick, 800);
+}
+
+function capturePhoto() {
+  // Flash
+  flashEl.style.opacity = '0.9';
+  setTimeout(() => flashEl.style.opacity = '0', 200);
+
+  // Draw current frame to temp canvas (mirror back)
+  const tmp = document.createElement('canvas');
+  tmp.width = video.videoWidth || 640;
+  tmp.height = video.videoHeight || 480;
+  const tctx = tmp.getContext('2d');
+
+  // Mirror
+  tctx.translate(tmp.width, 0);
+  tctx.scale(-1, 1);
+  tctx.drawImage(video, 0, 0, tmp.width, tmp.height);
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // Apply filter if active
+  if (filterMode > 0 && !blurred) {
+    tctx.filter = FILTER_CSS[filterMode];
+    tctx.drawImage(tmp, 0, 0);
+  }
+
+  const dataUrl = tmp.toDataURL('image/png');
+  gallery_photos.push(dataUrl);
+
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.onclick = () => downloadPhoto(dataUrl);
+  gallery.appendChild(img);
+}
+
+function downloadPhoto(dataUrl) {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = `gesture-booth-${Date.now()}.png`;
+  a.click();
+}
+
+// --- Controls ---
+function toggleBlur() {
+  blurred = !blurred;
+  btnBlur.textContent = blurred ? 'Unblur' : 'Blur';
+  btnBlur.classList.toggle('primary', blurred);
+}
+
+function cycleFilter() {
+  filterMode = (filterMode + 1) % FILTER_NAMES.length;
+  btnFilter.textContent = `Filter: ${FILTER_NAMES[filterMode]}`;
+}
+
+btnStart.onclick = async () => {
+  if (running) {
+    running = false;
+    camera && camera.stop();
+    btnStart.textContent = 'Start Camera';
+    btnStart.classList.add('primary');
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: 640, height: 480 },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+
+    // Init MediaPipe Hands
+    hands = new Hands({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    camera = new Camera(video, {
+      onFrame: async () => {
+        if (running) await hands.send(video);
+      },
+      width: 640,
+      height: 480
+    });
+    camera.start();
+
+    running = true;
+    btnStart.textContent = 'Stop';
+    btnStart.classList.remove('primary');
+    statusEl.textContent = '● LIVE';
+    statusEl.style.color = '#00ff88';
+  } catch (err) {
+    console.error(err);
+    alert('Camera access denied or unavailable: ' + err.message);
+  }
+};
+
+btnCapture.onclick = startCountdown;
+btnBlur.onclick = toggleBlur;
+btnFilter.onclick = cycleFilter;
+btnDownload.onclick = () => {
+  if (gallery_photos.length === 0) { alert('Belum ada foto!'); return; }
+  gallery_photos.forEach((url, i) => {
+    setTimeout(() => downloadPhoto(url), i * 300);
+  });
+};
+</script>
+</body>
+</html>
