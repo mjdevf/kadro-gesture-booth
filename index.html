@@ -132,6 +132,7 @@ let prevRawQuad = null;
 let photos = [];
 let photoBusy = false;
 let peaceStreak = 0;
+let lGrace = 0; // frame setelah L aktif — peace diblokir
 let dbg = { hands: 0, valid: 0, score: [], peace: false, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
@@ -258,12 +259,15 @@ function loop() {
     rawQuad = expandQuad(buildQuad(frameHands[0], frameHands[1]), 1.25);
     quad = smoothQuad(rawQuad, prevRawQuad, 0.5);
     prevRawQuad = rawQuad;
+    lGrace = 24; // ada 2 L di frame → peace ga boleh nembak dulu
+  } else if (lGrace > 0) {
+    lGrace--;
   }
 
-  // trigger foto: peace stabil 8 frame + cooldown antar foto
-  if (peace) { peaceStreak++; }
+  // trigger foto: peace stabil 10 frame, ga ada L baru-baru ini, + cooldown
+  if (peace && lGrace === 0) { peaceStreak++; }
   else { peaceStreak = 0; }
-  if (peaceStreak === 8 && !photoBusy && !locked) captureNow();
+  if (peaceStreak === 10 && !photoBusy && !locked) captureNow();
   btnCapture.disabled = !running;
   btnDownload.disabled = photos.length === 0;
 
