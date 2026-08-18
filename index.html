@@ -272,6 +272,8 @@ let lGrace = 0; // frame setelah L aktif — peace diblokir
 let effectMode = 0; // 0 blur, 1 invert, 2 grayscale, 3 pixelate, 4 off
 const EFFECT_NAMES = ["Blur", "Negatif", "B&W", "Pixel", "Off"];
 const EFFECT_FILTERS = ["blur(12px)", "invert(1)", "grayscale(1)", "none", "none"];
+let lastFxQuad = null; // quad terakhir pas locked — buat reconstruct foto
+let lastFxAt = 0;
 let dbg = { hands: 0, valid: 0, score: [], peace: false, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
@@ -415,6 +417,8 @@ function loop() {
   ctx.drawImage(video, 0, 0, w, h);
 
   if (quad && locked && effectMode !== 4) {
+    lastFxQuad = quad.map(p => ({ x: p.x, y: p.y }));
+    lastFxAt = performance.now();
     bctx.clearRect(0, 0, w, h);
     bctx.filter = EFFECT_FILTERS[effectMode];
     bctx.drawImage(video, 0, 0, w, h);
@@ -494,8 +498,52 @@ function captureNow() {
   flash.style.opacity = "0.9";
   setTimeout(() => { flash.style.opacity = "0"; }, 150);
 
-  // snapshot canvas (sudah ada blur/outline dari frame sekarang)
-  const url = canvas.toDataURL("image/jpeg", 0.92);
+  // reconstruct: kalau efek L baru aja aktif (quad fresh < 2.5s lalu),
+  // render ulang efek di quad itu ke frame sekarang → foto include box+efek
+  const w = canvas.width, h = canvas.height;
+  const fxQuad = (locked && quad) ? quad : (
+    lastFxQuad && (performance.now() - lastFxAt) < 2500 ? lastFxQuad : null
+  );
+  const snap = document.createElement("canvas");
+  snap.width = w; snap.height = h;
+  const sctx = snap.getContext("2d");
+  sctx.drawImage(video, 0, 0, w, h);
+  if (fxQuad && effectMode !== 4) {
+    const b = document.createElement("canvas");
+    b.width = w; b.height = h;
+    const b2 = b.getContext("2d");
+    b2.filter = EFFECT_FILTERS[effectMode];
+    b2.drawImage(video, 0, 0, w, h);
+    b2.filter = "none";
+    if (effectMode === 3) {
+      b2.clearRect(0, 0, w, h);
+      b2.imageSmoothingEnabled = false;
+      const blk = 12;
+      b2.drawImage(video, 0, 0, Math.max(1, w / blk), Math.max(1, h / blk));
+      b2.drawImage(b, 0, 0, Math.max(1, w / blk), Math.max(1, h / blk), 0, 0, w, h);
+      b2.imageSmoothingEnabled = true;
+    }
+    b2.save();
+    b2.beginPath();
+    b2.moveTo(fxQuad[0].x * w, fxQuad[0].y * h);
+    for (let i = 1; i < 4; i++) b2.lineTo(fxQuad[i].x * w, fxQuad[i].y * h);
+    b2.closePath();
+    b2.globalCompositeOperation = "destination-in";
+    b2.fillStyle = "#fff";
+    b2.fill();
+    b2.restore();
+    sctx.drawImage(b, 0, 0, w, h);
+    // outline tipis biar frame-nya keliatan framing
+    sctx.strokeStyle = "rgba(255,55,95,.8)";
+    sctx.lineWidth = 3;
+    sctx.beginPath();
+    sctx.moveTo(fxQuad[0].x * w, fxQuad[0].y * h);
+    for (let i = 1; i < 4; i++) sctx.lineTo(fxQuad[i].x * w, fxQuad[i].y * h);
+    sctx.closePath();
+    sctx.stroke();
+    lastFxQuad = null; // sekali pakai — foto berikutnya clean
+  }
+  const url = snap.toDataURL("image/jpeg", 0.92);
   photos.push(url);
   const cnt = document.getElementById("g-count");
   cnt.textContent = photos.length + " foto";
