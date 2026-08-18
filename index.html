@@ -68,11 +68,6 @@
     gap: 14px; background: rgba(8,8,13,.72); backdrop-filter: blur(4px);
     text-align: center; padding: 24px;
   }
-  #cover .hand {
-    font-size: 56px; line-height: 1;
-    filter: drop-shadow(0 8px 24px rgba(255,51,102,.35));
-    animation: float 3s ease-in-out infinite;
-  }
   @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
   #cover h2 { font-size: 19px; font-weight: 800; letter-spacing: -.01em; }
   #cover p { font-size: 13px; color: var(--muted); max-width: 300px; line-height: 1.5; }
@@ -104,7 +99,6 @@
     background: var(--bg-2); border: 1px solid var(--line);
     border-radius: 14px; padding: 10px 12px;
   }
-  #guide .card .ic { font-size: 24px; }
   #guide .card b { display: block; font-size: 13px; }
   #guide .card span { font-size: 11px; color: var(--muted); line-height: 1.35; }
 
@@ -169,9 +163,12 @@
   <video id="video" playsinline webkit-playsinline autoplay muted></video>
   <canvas id="canvas"></canvas>
   <div id="cover">
-    <div class="hand">👐</div>
+    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 8px 24px rgba(255,51,102,.35)); animation: float 3s ease-in-out infinite;">
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+      <circle cx="12" cy="13" r="3.5"/>
+    </svg>
     <h2>Nyalain kamera, main pakai tangan</h2>
-    <p>Dua tangan bikin <b style="color:var(--text)">L</b> → kotak + blur. Satu tangan <b style="color:var(--text)">✌️</b> → foto.</p>
+    <p>Dua tangan bikin <b style="color:var(--text)">L</b> → kotak + blur. Satu tangan <b style="color:var(--text)">peace</b> → foto.</p>
   </div>
   <div id="hud">
     <span id="g-status">kamera off</span>
@@ -182,19 +179,28 @@
 
 <div id="guide">
   <div class="card">
-    <div class="ic">🤟</div>
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 3H5a2 2 0 0 0-2 2v2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+      <path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M17 21h2a2 2 0 0 0 2-2v-2"/>
+    </svg>
     <div><b>L dua tangan</b><span>jempol+telunjuk siku-siku, jari lain tekuk → blur</span></div>
   </div>
   <div class="card">
-    <div class="ic">✌️</div>
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+      <circle cx="12" cy="13" r="3.5"/>
+    </svg>
     <div><b>Peace</b><span>satu tangan, telunjuk+tengah naik → foto</span></div>
   </div>
 </div>
 
 <div id="controls">
   <button class="primary" id="btn-start">Nyalain Kamera</button>
-  <button id="btn-capture" disabled>📷 Foto</button>
-  <button id="btn-download" disabled>↓ Unduh</button>
+  <button id="btn-capture" disabled>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px;"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    Foto
+  </button>
+  <button id="btn-download" disabled>Unduh</button>
   <button id="btn-debug">Debug</button>
 </div>
 
@@ -394,7 +400,7 @@ function loop() {
     for (let i = 1; i < 4; i++) ctx.lineTo(quad[i].x * w, quad[i].y * h);
     ctx.closePath();
     ctx.stroke();
-    frameEl.textContent = "🔒 LOCK";
+    frameEl.textContent = "LOCK";
     frameEl.classList.add("locked");
   } else {
     if (quad) {
@@ -407,7 +413,7 @@ function loop() {
       ctx.stroke();
     }
     frameEl.textContent = peace
-      ? (photoBusy ? "📷…" : "✌️ peace — foto!")
+      ? (photoBusy ? "memotret…" : "peace — foto!")
       : hands.length >= 2
         ? "2 tangan L — diam sebentar"
         : `terlihat ${dbg.hands} tangan`;
