@@ -108,6 +108,7 @@ let locked = false;
 let validStreak = 0, invalidStreak = 0;
 let quad = null;
 let rawQuad = null;
+let prevRawQuad = null;
 let dbg = { hands: 0, valid: 0, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
@@ -213,10 +214,11 @@ function loop() {
   if (frameHands) { validStreak++; invalidStreak = 0; }
   else { invalidStreak++; validStreak = 0; }
   if (!locked && validStreak >= 6) locked = true;
-  if (locked && invalidStreak >= 10) { locked = false; quad = null; }
+  if (locked && invalidStreak >= 10) { locked = false; quad = null; rawQuad = null; prevRawQuad = null; }
   if (frameHands) {
-    rawQuad = expandQuad(buildQuad(frameHands[0], frameHands[1]), 1.6);
-    quad = smoothQuad(rawQuad, quad, 0.35);
+    rawQuad = expandQuad(buildQuad(frameHands[0], frameHands[1]), 1.25);
+    quad = smoothQuad(rawQuad, prevRawQuad, 0.5);
+    prevRawQuad = rawQuad;
   }
 
   ctx.clearRect(0, 0, w, h);
@@ -367,6 +369,7 @@ function stop() {
   frameEl.textContent = "—";
   frameEl.classList.remove("locked");
   quad = null; locked = false;
+  rawQuad = null; prevRawQuad = null;
 }
 
 btnStart.onclick = () => running ? stop() : start();
