@@ -44,6 +44,20 @@
     font-weight: 600; white-space: nowrap;
   }
   #hud span.locked { background: var(--accent); }
+  #flash {
+    position: absolute; inset: 0; background: #fff;
+    opacity: 0; pointer-events: none; z-index: 20;
+    transition: opacity .1s;
+  }
+  #gallery {
+    display: flex; gap: 6px; padding: 6px 10px;
+    overflow-x: auto; max-width: 100%;
+  }
+  #gallery img { height: 56px; border-radius: 6px; }
+  #gallery .count {
+    align-self: center; font-size: 11px; color: #888;
+    white-space: nowrap; font-family: ui-monospace, monospace;
+  }
   #debug {
     display: none; width: 100%; max-width: 640px; padding: 8px 14px;
     font-size: 11px; color: #7f8; font-family: ui-monospace, monospace;
@@ -75,14 +89,18 @@
     <span id="g-status">kamera off</span>
     <span id="g-frame">—</span>
   </div>
+  <div id="flash"></div>
 </div>
 <div id="hint">
-  Bikin <b>L</b> dua tangan (jempol + telunjuk siku-siku, jari lain tekuk), satukan → kotak muncul, area dalam kotak <b>auto blur</b>.
+  Dua tangan <b>L</b> → kotak + blur. <b>✌️ Peace</b> satu tangan → foto. Jari lain tekuk.
 </div>
 <div id="controls">
   <button class="primary" id="btn-start">Start Camera</button>
+  <button id="btn-capture" disabled>Capture</button>
+  <button id="btn-download" disabled>Download</button>
   <button id="btn-debug">Debug</button>
 </div>
+<div id="gallery"><span class="count" id="g-count">0 foto</span></div>
 <div id="debug"></div>
 
 <script type="module">
@@ -94,6 +112,8 @@ const ctx = canvas.getContext("2d");
 const statusEl = document.getElementById("g-status");
 const frameEl = document.getElementById("g-frame");
 const btnStart = document.getElementById("btn-start");
+const btnCapture = document.getElementById("btn-capture");
+const btnDownload = document.getElementById("btn-download");
 const btnDebug = document.getElementById("btn-debug");
 const banner = document.getElementById("banner");
 const errBox = document.getElementById("err");
@@ -109,7 +129,10 @@ let validStreak = 0, invalidStreak = 0;
 let quad = null;
 let rawQuad = null;
 let prevRawQuad = null;
-let dbg = { hands: 0, valid: 0, score: [], err: "", fps: 0, frames: 0, t0: performance.now() };
+let photos = [];
+let photoBusy = false;
+let peaceStreak = 0;
+let dbg = { hands: 0, valid: 0, score: [], peace: false, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
 const bctx = blurCanvas.getContext("2d");
@@ -219,6 +242,14 @@ function loop() {
     if (d > 0.05 && d < 1.15) frameHands = [top[0].lm, top[1].lm];
   }
 
+  // Peace: TEPAT 1 tangan, index+middle extended, ring+pinky folded, thumb bebas
+  let peace = false;
+  if (hands.length === 1) {
+    const h = hands[0];
+    peace = ext(h, 8, 6) && ext(h, 12, 10) && folded(h, 16, 14) && folded(h, 20, 18);
+  }
+  dbg.peace = peace;
+
   if (frameHands) { validStreak++; invalidStreak = 0; }
   else { invalidStreak++; validStreak = 0; }
   if (!locked && validStreak >= 6) locked = true;
@@ -228,6 +259,13 @@ function loop() {
     quad = smoothQuad(rawQuad, prevRawQuad, 0.5);
     prevRawQuad = rawQuad;
   }
+
+  // trigger foto: peace stabil 8 frame + cooldown antar foto
+  if (peace) { peaceStreak++; }
+  else { peaceStreak = 0; }
+  if (peaceStreak === 8 && !photoBusy && !locked) captureNow();
+  btnCapture.disabled = !running;
+  btnDownload.disabled = photos.length === 0;
 
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
@@ -266,9 +304,11 @@ function loop() {
       ctx.closePath();
       ctx.stroke();
     }
-    frameEl.textContent = hands.length >= 2
-      ? (valid.length >= 2 ? "2 tangan valid — diam sebentar" : "L-nya belum pas")
-      : `terlihat ${dbg.hands} tangan`;
+    frameEl.textContent = peace
+      ? (photoBusy ? "📷…" : "✌️ peace — foto!")
+      : hands.length >= 2
+        ? "2 tangan L — diam sebentar"
+        : `terlihat ${dbg.hands} tangan`;
     frameEl.classList.remove("locked");
   }
 
@@ -286,8 +326,35 @@ function loop() {
 function renderDebug() {
   if (debugBox.style.display === "none") return;
   debugBox.textContent =
-    `fps: ${dbg.fps} | hands: ${dbg.hands} | L: ${dbg.valid} (${(dbg.score || []).join("/")}) | locked: ${locked} | ` +
-    `streak: ${validStreak}/${invalidStreak}${dbg.err ? " | err: " + dbg.err : ""}`;
+    `fps: ${dbg.fps} | hands: ${dbg.hands} | L: ${dbg.valid} (${(dbg.score || []).join("/")}) | ` +
+    `peace: ${dbg.peace} | locked: ${locked} | streak: ${validStreak}/${invalidStreak}${dbg.err ? " | err: " + dbg.err : ""}`;
+}
+
+// --- foto ---
+function captureNow() {
+  if (photoBusy || !running) return;
+  photoBusy = true;
+  const flash = document.getElementById("flash");
+  flash.style.opacity = "0.9";
+  setTimeout(() => { flash.style.opacity = "0"; }, 150);
+
+  // snapshot canvas (sudah ada blur/outline dari frame sekarang)
+  const url = canvas.toDataURL("image/jpeg", 0.92);
+  photos.push(url);
+  const cnt = document.getElementById("g-count");
+  cnt.textContent = photos.length + " foto";
+  const img = document.createElement("img");
+  img.src = url;
+  img.onclick = () => downloadPhoto(url);
+  document.getElementById("gallery").appendChild(img);
+  setTimeout(() => { photoBusy = false; }, 1200); // cooldown
+}
+
+function downloadPhoto(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "booth-" + Date.now() + ".jpg";
+  a.click();
 }
 
 // --- model + camera ---
@@ -381,6 +448,11 @@ function stop() {
 }
 
 btnStart.onclick = () => running ? stop() : start();
+btnCapture.onclick = captureNow;
+btnDownload.onclick = () => {
+  if (!photos.length) return;
+  photos.forEach((u, i) => setTimeout(() => downloadPhoto(u), i * 250));
+};
 btnDebug.onclick = () => {
   debugBox.style.display = debugBox.style.display === "none" ? "block" : "none";
   renderDebug();
