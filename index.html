@@ -15,14 +15,12 @@
     height: 100dvh; display: flex; flex-direction: column; align-items: center;
     overflow: hidden;
   }
-  #err {
+  #banner, #err {
     display: none; width: 100%; max-width: 640px; padding: 10px 14px;
-    background: #3a1018; color: #ff8899; font-size: 13px; text-align: center;
+    font-size: 13px; text-align: center;
   }
-  #banner {
-    display: none; width: 100%; padding: 10px 14px;
-    background: #3a1a00; color: #ffcc88; font-size: 13px; text-align: center;
-  }
+  #banner { background: #3a1a00; color: #ffcc88; }
+  #err { background: #3a1018; color: #ff8899; }
   #stage {
     position: relative; width: 100%; max-width: 640px;
     aspect-ratio: 3/4; max-height: 64dvh; background: #111;
@@ -43,15 +41,20 @@
   }
   #hud span {
     background: var(--panel); padding: 6px 12px; border-radius: 20px;
-    font-weight: 600;
+    font-weight: 600; white-space: nowrap;
   }
   #hud span.locked { background: var(--accent); }
+  #debug {
+    display: none; width: 100%; max-width: 640px; padding: 8px 14px;
+    font-size: 11px; color: #7f8; font-family: ui-monospace, monospace;
+    line-height: 1.5;
+  }
   #hint {
     text-align: center; padding: 10px 16px; max-width: 520px;
     font-size: 13px; color: #999; line-height: 1.6;
   }
   #hint b { color: var(--accent); }
-  #controls { display: flex; gap: 8px; padding: 10px; justify-content: center; }
+  #controls { display: flex; gap: 8px; padding: 10px; justify-content: center; flex-wrap: wrap; }
   #controls button {
     background: var(--panel); border: 1px solid #333;
     color: #fff; padding: 12px 22px; border-radius: 12px;
@@ -74,11 +77,13 @@
   </div>
 </div>
 <div id="hint">
-  Bikin <b>L</b> dengan dua tangan (jempol + telunjuk), satukan jadi kotak → area dalam kotak <b>auto blur</b> real-time. Jari lain ditekuk.
+  Bikin <b>L</b> dua tangan (jempol + telunjuk siku-siku, jari lain tekuk), satukan → kotak muncul, area dalam kotak <b>auto blur</b>.
 </div>
 <div id="controls">
   <button class="primary" id="btn-start">Start Camera</button>
+  <button id="btn-debug">Debug</button>
 </div>
+<div id="debug"></div>
 
 <script type="module">
 import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
@@ -89,8 +94,10 @@ const ctx = canvas.getContext("2d");
 const statusEl = document.getElementById("g-status");
 const frameEl = document.getElementById("g-frame");
 const btnStart = document.getElementById("btn-start");
+const btnDebug = document.getElementById("btn-debug");
 const banner = document.getElementById("banner");
 const errBox = document.getElementById("err");
+const debugBox = document.getElementById("debug");
 
 let landmarker = null;
 let stream = null;
@@ -98,16 +105,15 @@ let running = false;
 let rafId = 0;
 let lastVideoTime = -1;
 let locked = false;
-let validStreak = 0;
-let invalidStreak = 0;
-let quad = null; // 4 titik {x,y} normalized, urut sudut
+let validStreak = 0, invalidStreak = 0;
+let quad = null;
+let dbg = { hands: 0, valid: 0, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
 const bctx = blurCanvas.getContext("2d");
 
 const inApp = /FBAN|FBAV|Instagram|Line\/|WhatsApp|Telegram|wv\)/i.test(navigator.userAgent)
-  || !!window.TelegramWebviewProxy
-  || !!window.TelegramWebview;
+  || !!window.TelegramWebviewProxy || !!window.TelegramWebview;
 if (inApp) {
   banner.style.display = "block";
   banner.textContent = "Buka di Chrome/Safari. Kamera diblokir in-app Telegram.";
@@ -118,29 +124,41 @@ function showErr(m) {
   errBox.textContent = m;
   console.error(m);
 }
+function setStatus(t) {
+  statusEl.textContent = t;
+  console.log("[status]", t);
+}
 
-// --- vectors & angles (landmark normalized) ---
+// --- helper ---
 function vec(a, b) { return { x: b.x - a.x, y: b.y - a.y }; }
 function angleDeg(v1, v2) {
   const dot = v1.x * v2.x + v1.y * v2.y;
   const m = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y);
-  if (!m) return 180;
+  if (!m) return 999;
   return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
 }
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
-// Valid L: thumb(4→2) ⊥ index(8→5) ±35°, index terbuka, 3 jari lain folded
+// orientation-invariant: bandingkan jarak tip vs pip dari wrist
+// extended: tip > pip jaraknya dari wrist; folded: tip < pip
+function fingerState(lm, tipId, pipId) {
+  const w = lm[0];
+  const dTip = dist(w, lm[tipId]);
+  const dPip = dist(w, lm[pipId]);
+  return dTip > dPip ? 1 : 0; // 1 = extended
+}
+
+// L valid: thumb(2→4) ⊥ index(5→8) ±45°, index extended, middle/ring/pinky folded
 function isLShape(lm) {
   const a = angleDeg(vec(lm[2], lm[4]), vec(lm[5], lm[8]));
-  if (Math.abs(a - 90) > 35) return false;
-  if (lm[8].y >= lm[6].y) return false;                 // index tip di atas pip
-  if (lm[12].y <= lm[10].y) return false;               // middle folded
-  if (lm[16].y <= lm[14].y) return false;               // ring folded
-  if (lm[20].y <= lm[18].y) return false;               // pinky folded
+  if (Math.abs(a - 90) > 45) return false;
+  if (!fingerState(lm, 8, 6)) return false;    // index extended
+  if (fingerState(lm, 12, 10)) return false;   // middle folded
+  if (fingerState(lm, 16, 14)) return false;   // ring folded
+  if (fingerState(lm, 20, 18)) return false;   // pinky folded
   return true;
 }
 
-// 4 corner: thumb+index tip dari 2 tangan, sort-by-angle dari centroid → anti bowtie
 function buildQuad(hA, hB) {
   const pts = [hA[4], hA[8], hB[4], hB[8]].map(p => ({ x: p.x, y: p.y }));
   const cx = pts.reduce((s, p) => s + p.x, 0) / 4;
@@ -153,53 +171,35 @@ function buildQuad(hA, hB) {
 function loop() {
   if (!running) return;
   rafId = requestAnimationFrame(loop);
-  if (!landmarker || video.readyState < 2) return;
+
+  const w = canvas.width, h = canvas.height;
+  if (!landmarker || video.readyState < 2 || video.videoWidth === 0) return;
   if (video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
 
-  if (canvas.width !== video.videoWidth) {
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    blurCanvas.width = canvas.width;
-    blurCanvas.height = canvas.height;
-  }
-  const w = canvas.width, h = canvas.height;
-
   const result = landmarker.detectForVideo(video, performance.now());
   const hands = result.landmarks || [];
+  dbg.hands = hands.length;
 
-  // 1-2. dua tangan valid L + range jarak
   let frameHands = null;
-  if (hands.length >= 2) {
-    const candidates = hands.filter(isLShape);
-    if (candidates.length >= 2) {
-      const cA = candidates[0], cB = candidates[1];
-      const c1 = cA[0], c2 = cB[0];
-      const d = dist(c1, c2);
-      if (d > 0.12 && d < 0.7) frameHands = [cA, cB];
-    }
+  const valid = hands.filter(isLShape);
+  dbg.valid = valid.length;
+  if (valid.length >= 2) {
+    const cA = valid[0], cB = valid[1];
+    const d = dist(cA[0], cB[0]);
+    if (d > 0.08 && d < 0.85) frameHands = [cA, cB];
   }
 
-  // stabilisasi: lock setelah 8 frame valid, unlock setelah 8 invalid
   if (frameHands) { validStreak++; invalidStreak = 0; }
   else { invalidStreak++; validStreak = 0; }
-  if (!locked && validStreak >= 8) locked = true;
-  if (locked && invalidStreak >= 8) { locked = false; quad = null; }
+  if (!locked && validStreak >= 6) locked = true;
+  if (locked && invalidStreak >= 10) { locked = false; quad = null; }
   if (frameHands) quad = buildQuad(frameHands[0], frameHands[1]);
 
-  // 5-8. composite: frame asli + area quad di-blur via mask polygon
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
 
   if (quad && locked) {
-    // draw landmark titik corner sebagai feedback
-    ctx.fillStyle = "rgba(255,255,255,.9)";
-    for (const p of quad) {
-      ctx.beginPath();
-      ctx.arc(p.x * w, p.y * h, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // blur full-frame ke offscreen, mask polygon, composite
     bctx.clearRect(0, 0, w, h);
     bctx.filter = "blur(12px)";
     bctx.drawImage(video, 0, 0, w, h);
@@ -214,8 +214,6 @@ function loop() {
     bctx.fill();
     bctx.restore();
     ctx.drawImage(blurCanvas, 0, 0, w, h);
-
-    // outline kotak
     ctx.strokeStyle = "#ff3366";
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -226,38 +224,68 @@ function loop() {
     frameEl.textContent = "🔒 LOCK";
     frameEl.classList.add("locked");
   } else {
-    ctx.strokeStyle = "rgba(255,255,255,.3)";
-    ctx.lineWidth = 2;
     if (quad) {
+      ctx.strokeStyle = "rgba(255,255,255,.35)";
+      ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(quad[0].x * w, quad[0].y * h);
       for (let i = 1; i < 4; i++) ctx.lineTo(quad[i].x * w, quad[i].y * h);
       ctx.closePath();
       ctx.stroke();
     }
-    frameEl.textContent = hands.length ? "bentuk L di 2 tangan" : "tunjuk 2 tangan";
+    frameEl.textContent = hands.length >= 2
+      ? (valid.length >= 2 ? "2 tangan valid — diam sebentar" : "L-nya belum pas")
+      : `terlihat ${dbg.hands} tangan`;
     frameEl.classList.remove("locked");
   }
+
+  // debug
+  dbg.frames++;
+  const dt = performance.now() - dbg.t0;
+  if (dt > 500) {
+    dbg.fps = Math.round(dbg.frames * 1000 / dt);
+    dbg.frames = 0;
+    dbg.t0 = performance.now();
+    renderDebug();
+  }
+}
+
+function renderDebug() {
+  if (debugBox.style.display === "none") return;
+  debugBox.textContent =
+    `fps: ${dbg.fps} | hands: ${dbg.hands} | L-valid: ${dbg.valid} | locked: ${locked} | ` +
+    `streak: ${validStreak}/${invalidStreak}${dbg.err ? " | err: " + dbg.err : ""}`;
 }
 
 // --- model + camera ---
 async function loadModel() {
-  if (landmarker) return;
-  statusEl.textContent = "load model…";
+  if (landmarker) return true;
+  setStatus("load wasm…");
   const fileset = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
   );
-  landmarker = await HandLandmarker.createFromOptions(fileset, {
-    baseOptions: {
-      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-      delegate: "GPU"
-    },
-    runningMode: "VIDEO",
-    numHands: 2,
-    minHandDetectionConfidence: 0.5,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
+  setStatus("load model…");
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      landmarker = await HandLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate
+        },
+        runningMode: "VIDEO",
+        numHands: 2,
+        minHandDetectionConfidence: 0.4,
+        minHandPresenceConfidence: 0.4,
+        minTrackingConfidence: 0.4
+      });
+      setStatus("model OK (" + delegate + ")");
+      return true;
+    } catch (e) {
+      console.warn("delegate", delegate, "gagal:", e);
+      dbg.err = "delegate " + delegate + " gagal, coba lain";
+    }
+  }
+  return false;
 }
 
 async function start() {
@@ -267,26 +295,28 @@ async function start() {
     return;
   }
   btnStart.disabled = true;
+  btnDebug.style.display = "inline-block";
   try {
-    await loadModel();
+    const ok = await loadModel();
+    if (!ok) { showErr("Model gagal load. Cek internet / coba Chrome terbaru."); return; }
+    setStatus("minta kamera…");
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
-      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+      video: { facingMode: "user" }
     });
     video.srcObject = stream;
     video.setAttribute("playsinline", "");
     video.setAttribute("webkit-playsinline", "");
     await video.play();
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    blurCanvas.width = canvas.width;
-    blurCanvas.height = canvas.height;
+    const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+    canvas.width = vw; canvas.height = vh;
+    blurCanvas.width = vw; blurCanvas.height = vh;
     running = true;
     lastVideoTime = -1;
     loop();
     btnStart.textContent = "Stop";
     btnStart.classList.remove("primary");
-    statusEl.textContent = "● LIVE";
+    setStatus("● LIVE");
     statusEl.style.color = "#00ff88";
   } catch (e) {
     const n = e.name || "";
@@ -294,6 +324,7 @@ async function start() {
     else if (n === "NotFoundError") showErr("Kamera tidak ketemu.");
     else if (n === "NotReadableError") showErr("Kamera dipakai app lain. Tutup dulu.");
     else showErr("Gagal: " + (e.message || n || e));
+    console.error(e);
     stop();
   } finally {
     btnStart.disabled = false;
@@ -305,10 +336,10 @@ function stop() {
   cancelAnimationFrame(rafId);
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   video.srcObject = null;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (canvas.width) ctx.clearRect(0, 0, canvas.width, canvas.height);
   btnStart.textContent = "Start Camera";
   btnStart.classList.add("primary");
-  statusEl.textContent = "kamera off";
+  setStatus("kamera off");
   statusEl.style.color = "#fff";
   frameEl.textContent = "—";
   frameEl.classList.remove("locked");
@@ -316,6 +347,10 @@ function stop() {
 }
 
 btnStart.onclick = () => running ? stop() : start();
+btnDebug.onclick = () => {
+  debugBox.style.display = debugBox.style.display === "none" ? "block" : "none";
+  renderDebug();
+};
 </script>
 </body>
 </html>
