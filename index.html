@@ -231,6 +231,7 @@
     Foto
   </button>
   <button id="btn-download" disabled>Unduh</button>
+  <button id="btn-effect" disabled>Efek: Blur</button>
   <button id="btn-debug">Debug</button>
 </div>
 
@@ -248,6 +249,7 @@ const frameEl = document.getElementById("g-frame");
 const btnStart = document.getElementById("btn-start");
 const btnCapture = document.getElementById("btn-capture");
 const btnDownload = document.getElementById("btn-download");
+const btnEffect = document.getElementById("btn-effect");
 const btnDebug = document.getElementById("btn-debug");
 const banner = document.getElementById("banner");
 const errBox = document.getElementById("err");
@@ -267,6 +269,9 @@ let photos = [];
 let photoBusy = false;
 let peaceStreak = 0;
 let lGrace = 0; // frame setelah L aktif — peace diblokir
+let effectMode = 0; // 0 blur, 1 invert, 2 grayscale, 3 pixelate, 4 off
+const EFFECT_NAMES = ["Blur", "Negatif", "B&W", "Pixel", "Off"];
+const EFFECT_FILTERS = ["blur(12px)", "invert(1)", "grayscale(1)", "none", "none"];
 let dbg = { hands: 0, valid: 0, score: [], peace: false, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
@@ -404,15 +409,28 @@ function loop() {
   if (peaceStreak === 10 && !photoBusy && !locked) captureNow();
   btnCapture.disabled = !running;
   btnDownload.disabled = photos.length === 0;
+  btnEffect.disabled = !running;
 
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
 
-  if (quad && locked) {
+  if (quad && locked && effectMode !== 4) {
     bctx.clearRect(0, 0, w, h);
-    bctx.filter = "blur(12px)";
+    bctx.filter = EFFECT_FILTERS[effectMode];
     bctx.drawImage(video, 0, 0, w, h);
     bctx.filter = "none";
+
+    // pixelate: downscale-upscale dalam mask
+    if (effectMode === 3) {
+      const bw = blurCanvas.width, bh = blurCanvas.height;
+      bctx.clearRect(0, 0, bw, bh);
+      bctx.imageSmoothingEnabled = false;
+      const block = 12;
+      bctx.drawImage(video, 0, 0, Math.max(1, bw / block), Math.max(1, bh / block));
+      bctx.drawImage(blurCanvas, 0, 0, Math.max(1, bw / block), Math.max(1, bh / block), 0, 0, bw, bh);
+      bctx.imageSmoothingEnabled = true;
+    }
+
     bctx.save();
     bctx.beginPath();
     bctx.moveTo(quad[0].x * w, quad[0].y * h);
@@ -591,6 +609,10 @@ function stop() {
 
 btnStart.onclick = () => running ? stop() : start();
 btnCapture.onclick = captureNow;
+btnEffect.onclick = () => {
+  effectMode = (effectMode + 1) % EFFECT_NAMES.length;
+  btnEffect.textContent = "Efek: " + EFFECT_NAMES[effectMode];
+};
 btnDownload.onclick = () => {
   if (!photos.length) return;
   photos.forEach((u, i) => setTimeout(() => downloadPhoto(u), i * 250));
