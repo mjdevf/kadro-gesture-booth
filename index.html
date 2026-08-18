@@ -107,6 +107,7 @@ let lastVideoTime = -1;
 let locked = false;
 let validStreak = 0, invalidStreak = 0;
 let quad = null;
+let rawQuad = null;
 let dbg = { hands: 0, valid: 0, err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
@@ -167,6 +168,25 @@ function buildQuad(hA, hB) {
     Math.atan2(p.y - cy, p.x - cx) - Math.atan2(q.y - cy, q.x - cx));
 }
 
+// perbesar quad dari centroid + clamp ke frame, biar blur ga cuma nempel di wajah
+function expandQuad(pts, f) {
+  const cx = pts.reduce((s, p) => s + p.x, 0) / 4;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / 4;
+  return pts.map(p => ({
+    x: Math.max(0.02, Math.min(0.98, cx + (p.x - cx) * f)),
+    y: Math.max(0.02, Math.min(0.98, cy + (p.y - cy) * f))
+  }));
+}
+
+// lerp antar frame biar quad halus, ga lompat-lompat
+function smoothQuad(cur, prev, t) {
+  if (!prev) return cur;
+  return cur.map((p, i) => ({
+    x: prev[i].x + (p.x - prev[i].x) * t,
+    y: prev[i].y + (p.y - prev[i].y) * t
+  }));
+}
+
 // --- render ---
 function loop() {
   if (!running) return;
@@ -194,7 +214,10 @@ function loop() {
   else { invalidStreak++; validStreak = 0; }
   if (!locked && validStreak >= 6) locked = true;
   if (locked && invalidStreak >= 10) { locked = false; quad = null; }
-  if (frameHands) quad = buildQuad(frameHands[0], frameHands[1]);
+  if (frameHands) {
+    rawQuad = expandQuad(buildQuad(frameHands[0], frameHands[1]), 1.6);
+    quad = smoothQuad(rawQuad, quad, 0.35);
+  }
 
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
