@@ -109,7 +109,7 @@ let validStreak = 0, invalidStreak = 0;
 let quad = null;
 let rawQuad = null;
 let prevRawQuad = null;
-let dbg = { hands: 0, valid: 0, err: "", fps: 0, frames: 0, t0: performance.now() };
+let dbg = { hands: 0, valid: 0, score: [], err: "", fps: 0, frames: 0, t0: performance.now() };
 
 const blurCanvas = document.createElement("canvas");
 const bctx = blurCanvas.getContext("2d");
@@ -141,24 +141,29 @@ function angleDeg(v1, v2) {
 }
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 
-// orientation-invariant: bandingkan jarak tip vs pip dari wrist
-// extended: tip > pip jaraknya dari wrist; folded: tip < pip
-function fingerState(lm, tipId, pipId) {
+// hybrid: extended kalau tip di atas pip ATAU jelas lebih jauh dari wrist (margin 1.25x)
+// folded kalau dua-duanya setuju. Netral kalau konflik → ga dihitung.
+function ext(lm, tip, pip) {
   const w = lm[0];
-  const dTip = dist(w, lm[tipId]);
-  const dPip = dist(w, lm[pipId]);
-  return dTip > dPip ? 1 : 0; // 1 = extended
+  return (lm[tip].y < lm[pip].y) ||
+         (dist(w, lm[tip]) > dist(w, lm[pip]) * 1.25);
+}
+function folded(lm, tip, pip) {
+  const w = lm[0];
+  return (lm[tip].y > lm[pip].y) &&
+         (dist(w, lm[tip]) < dist(w, lm[pip]) * 1.25);
 }
 
-// L valid: thumb(2→4) ⊥ index(5→8) ±45°, index extended, middle/ring/pinky folded
-function isLShape(lm) {
-  const a = angleDeg(vec(lm[2], lm[4]), vec(lm[5], lm[8]));
-  if (Math.abs(a - 90) > 45) return false;
-  if (!fingerState(lm, 8, 6)) return false;    // index extended
-  if (fingerState(lm, 12, 10)) return false;   // middle folded
-  if (fingerState(lm, 16, 14)) return false;   // ring folded
-  if (fingerState(lm, 20, 18)) return false;   // pinky folded
-  return true;
+// skor L 0..5: index extended, middle folded, ring folded, pinky folded, angle 90±50
+function lScore(lm) {
+  let s = 0;
+  if (ext(lm, 8, 6)) s++;
+  if (folded(lm, 12, 10)) s++;
+  if (folded(lm, 16, 14)) s++;
+  if (folded(lm, 20, 18)) s++;
+  const a = angleDeg(vec(lm[3], lm[4]), vec(lm[6], lm[8]));
+  if (Math.abs(a - 90) <= 50) s++;
+  return s;
 }
 
 function buildQuad(hA, hB) {
@@ -203,12 +208,15 @@ function loop() {
   dbg.hands = hands.length;
 
   let frameHands = null;
-  const valid = hands.filter(isLShape);
-  dbg.valid = valid.length;
-  if (valid.length >= 2) {
-    const cA = valid[0], cB = valid[1];
-    const d = dist(cA[0], cB[0]);
-    if (d > 0.08 && d < 0.85) frameHands = [cA, cB];
+  const scored = hands
+    .map(h => ({ lm: h, score: lScore(h) }))
+    .sort((a, b) => b.score - a.score);
+  dbg.valid = scored.length ? scored[0].score : 0;
+  dbg.score = scored.map(s => s.score);
+  const top = scored.filter(s => s.score >= 3).slice(0, 2);
+  if (top.length === 2) {
+    const d = dist(top[0].lm[0], top[1].lm[0]);
+    if (d > 0.05 && d < 1.15) frameHands = [top[0].lm, top[1].lm];
   }
 
   if (frameHands) { validStreak++; invalidStreak = 0; }
@@ -278,7 +286,7 @@ function loop() {
 function renderDebug() {
   if (debugBox.style.display === "none") return;
   debugBox.textContent =
-    `fps: ${dbg.fps} | hands: ${dbg.hands} | L-valid: ${dbg.valid} | locked: ${locked} | ` +
+    `fps: ${dbg.fps} | hands: ${dbg.hands} | L: ${dbg.valid} (${(dbg.score || []).join("/")}) | locked: ${locked} | ` +
     `streak: ${validStreak}/${invalidStreak}${dbg.err ? " | err: " + dbg.err : ""}`;
 }
 
