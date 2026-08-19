@@ -386,20 +386,23 @@ function loop() {
     if (d > 0.05 && d < 1.15) frameHands = [top[0].lm, top[1].lm];
   }
 
-  // progres kotak: jumlah jari extended (index/middle/ring/pinky) dari 2 tangan
-  // 2 jari = 2 sisi, 3 = 3 sisi, 4 = kotak penuh
+  // progres kotak: 2 L beneran = langsung penuh (framing intent).
+  // Selain itu: jumlah jari extended = sisi (2 jari = 2 sisi, dst)
   let targetSides = 0;
   if (frameHands) {
-    targetSides = 0;
-    for (const h of frameHands) {
-      if (ext(h, 8, 6)) targetSides++;
-      if (ext(h, 12, 10)) targetSides++;
-      if (ext(h, 16, 14)) targetSides++;
-      if (ext(h, 20, 18)) targetSides++;
+    const bothL = top.length === 2 && top.every(s => s.score >= 4);
+    if (bothL) targetSides = 4;
+    else {
+      for (const h of frameHands) {
+        if (ext(h, 8, 6)) targetSides++;
+        if (ext(h, 12, 10)) targetSides++;
+        if (ext(h, 16, 14)) targetSides++;
+        if (ext(h, 20, 18)) targetSides++;
+      }
+      targetSides = Math.max(0, Math.min(4, targetSides));
     }
-    targetSides = Math.max(0, Math.min(4, targetSides));
   }
-  sidesShown += (targetSides - sidesShown) * 0.18; // lerp naik
+  sidesShown += (targetSides - sidesShown) * 0.28; // lerp naik
   if (targetSides === 0) sidesShown *= 0.94;       // decay pelan, ga reset
   if (sidesShown < 0.05) sidesShown = 0;
   const complete = sidesShown >= 3.9;
