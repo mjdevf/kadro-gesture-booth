@@ -265,6 +265,7 @@ let validStreak = 0, invalidStreak = 0;
 let quad = null;
 let rawQuad = null;
 let prevRawQuad = null;
+let sidesShown = 0; // progres kotak 0..4 (lerp)
 let photos = [];
 let photoBusy = false;
 let peaceStreak = 0;
@@ -378,11 +379,29 @@ function loop() {
     .sort((a, b) => b.score - a.score);
   dbg.valid = scored.length ? scored[0].score : 0;
   dbg.score = scored.map(s => s.score);
-  const top = scored.filter(s => s.score >= 3).slice(0, 2);
+  // longgar: score >= 2 — biar kotak mulai kebentuk progresif
+  const top = scored.filter(s => s.score >= 2).slice(0, 2);
   if (top.length === 2) {
     const d = dist(top[0].lm[0], top[1].lm[0]);
     if (d > 0.05 && d < 1.15) frameHands = [top[0].lm, top[1].lm];
   }
+
+  // progres kotak: jumlah jari extended (index/middle/ring/pinky) dari 2 tangan
+  // 2 jari = 2 sisi, 3 = 3 sisi, 4 = kotak penuh
+  let targetSides = 0;
+  if (frameHands) {
+    targetSides = 0;
+    for (const h of frameHands) {
+      if (ext(h, 8, 6)) targetSides++;
+      if (ext(h, 12, 10)) targetSides++;
+      if (ext(h, 16, 14)) targetSides++;
+      if (ext(h, 20, 18)) targetSides++;
+    }
+    targetSides = Math.max(0, Math.min(4, targetSides));
+  }
+  sidesShown += (targetSides - sidesShown) * 0.18; // lerp halus
+  if (sidesShown < 0.02) sidesShown = 0;
+  const complete = sidesShown >= 3.9;
 
   // Peace: TEPAT 1 tangan, index+middle extended, ring+pinky folded, thumb bebas
   let peace = false;
@@ -395,7 +414,7 @@ function loop() {
   if (frameHands) { validStreak++; invalidStreak = 0; }
   else { invalidStreak++; validStreak = 0; }
   if (!locked && validStreak >= 6) locked = true;
-  if (locked && invalidStreak >= 10) { locked = false; quad = null; rawQuad = null; prevRawQuad = null; }
+  if (locked && invalidStreak >= 10) { locked = false; quad = null; rawQuad = null; prevRawQuad = null; sidesShown = 0; }
   if (frameHands) {
     rawQuad = expandQuad(buildQuad(frameHands[0], frameHands[1]), 1.25);
     quad = smoothQuad(rawQuad, prevRawQuad, 0.5);
@@ -416,7 +435,8 @@ function loop() {
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
 
-  if (quad && locked && effectMode !== 4) {
+  // efek jalan cuma pas kotak hampir penuh
+  if (quad && locked && complete && effectMode !== 4) {
     lastFxQuad = quad.map(p => ({ x: p.x, y: p.y }));
     lastFxAt = performance.now();
     bctx.clearRect(0, 0, w, h);
@@ -445,24 +465,44 @@ function loop() {
     bctx.fill();
     bctx.restore();
     ctx.drawImage(blurCanvas, 0, 0, w, h);
-    ctx.strokeStyle = "#ff3366";
-    ctx.lineWidth = 4;
+    // outline progresif: sisi yang udah "kebentuk" (2/3/4)
+    ctx.strokeStyle = complete ? "#ff3366" : "rgba(255,55,95,.75)";
+    ctx.lineWidth = complete ? 4 : 3;
     ctx.beginPath();
     ctx.moveTo(quad[0].x * w, quad[0].y * h);
-    for (let i = 1; i < 4; i++) ctx.lineTo(quad[i].x * w, quad[i].y * h);
-    ctx.closePath();
+    for (let i = 1; i < 4; i++) {
+      if (sidesShown < i) break;
+      ctx.lineTo(quad[i].x * w, quad[i].y * h);
+    }
+    if (sidesShown >= 3.9) ctx.closePath();
     ctx.stroke();
-    frameEl.textContent = "LOCK";
-    frameEl.classList.add("locked");
+    // titik sudut yang udah aktif
+    ctx.fillStyle = "rgba(255,55,95,.9)";
+    for (let i = 0; i < Math.min(4, Math.ceil(sidesShown)); i++) {
+      ctx.beginPath();
+      ctx.arc(quad[i].x * w, quad[i].y * h, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    frameEl.textContent = complete ? "LOCK" : `kotak ${Math.round(sidesShown)}/4`;
+    frameEl.classList.toggle("locked", complete);
   } else {
     if (quad) {
       ctx.strokeStyle = "rgba(255,255,255,.35)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(quad[0].x * w, quad[0].y * h);
-      for (let i = 1; i < 4; i++) ctx.lineTo(quad[i].x * w, quad[i].y * h);
-      ctx.closePath();
+      for (let i = 1; i < 4; i++) {
+        if (sidesShown < i) break;
+        ctx.lineTo(quad[i].x * w, quad[i].y * h);
+      }
+      if (sidesShown >= 3.9) ctx.closePath();
       ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,.6)";
+      for (let i = 0; i < Math.min(4, Math.ceil(sidesShown)); i++) {
+        ctx.beginPath();
+        ctx.arc(quad[i].x * w, quad[i].y * h, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     frameEl.textContent = peace
       ? (photoBusy ? "memotret…" : "peace — foto!")
@@ -652,6 +692,7 @@ function stop() {
   frameEl.classList.remove("locked");
   quad = null; locked = false;
   rawQuad = null; prevRawQuad = null;
+  sidesShown = 0;
   document.getElementById("cover").style.display = "";
 }
 
