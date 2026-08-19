@@ -399,8 +399,9 @@ function loop() {
     }
     targetSides = Math.max(0, Math.min(4, targetSides));
   }
-  sidesShown += (targetSides - sidesShown) * 0.18; // lerp halus
-  if (sidesShown < 0.02) sidesShown = 0;
+  sidesShown += (targetSides - sidesShown) * 0.18; // lerp naik
+  if (targetSides === 0) sidesShown *= 0.94;       // decay pelan, ga reset
+  if (sidesShown < 0.05) sidesShown = 0;
   const complete = sidesShown >= 3.9;
 
   // Peace: TEPAT 1 tangan, index+middle extended, ring+pinky folded, thumb bebas
@@ -414,7 +415,7 @@ function loop() {
   if (frameHands) { validStreak++; invalidStreak = 0; }
   else { invalidStreak++; validStreak = 0; }
   if (!locked && validStreak >= 6) locked = true;
-  if (locked && invalidStreak >= 10) { locked = false; quad = null; rawQuad = null; prevRawQuad = null; sidesShown = 0; }
+  if (locked && invalidStreak >= 10) { locked = false; quad = null; rawQuad = null; prevRawQuad = null; }
   if (frameHands) {
     rawQuad = expandQuad(buildQuad(frameHands[0], frameHands[1]), 1.25);
     quad = smoothQuad(rawQuad, prevRawQuad, 0.5);
@@ -435,9 +436,10 @@ function loop() {
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
 
-  // efek jalan cuma pas kotak hampir penuh
-  if (quad && locked && complete && effectMode !== 4) {
-    lastFxQuad = quad.map(p => ({ x: p.x, y: p.y }));
+  // efek jalan pas kotak penuh — pakai quad live ATAU quad terakhir (sebelum unlock)
+  const fxRenderQuad = quad || (complete && lastFxQuad);
+  if (fxRenderQuad && complete && effectMode !== 4) {
+    lastFxQuad = fxRenderQuad.map(p => ({ x: p.x, y: p.y }));
     lastFxAt = performance.now();
     bctx.clearRect(0, 0, w, h);
     bctx.filter = EFFECT_FILTERS[effectMode];
@@ -457,8 +459,8 @@ function loop() {
 
     bctx.save();
     bctx.beginPath();
-    bctx.moveTo(quad[0].x * w, quad[0].y * h);
-    for (let i = 1; i < 4; i++) bctx.lineTo(quad[i].x * w, quad[i].y * h);
+    bctx.moveTo(fxRenderQuad[0].x * w, fxRenderQuad[0].y * h);
+    for (let i = 1; i < 4; i++) bctx.lineTo(fxRenderQuad[i].x * w, fxRenderQuad[i].y * h);
     bctx.closePath();
     bctx.globalCompositeOperation = "destination-in";
     bctx.fillStyle = "#fff";
@@ -469,10 +471,10 @@ function loop() {
     ctx.strokeStyle = complete ? "#ff3366" : "rgba(255,55,95,.75)";
     ctx.lineWidth = complete ? 4 : 3;
     ctx.beginPath();
-    ctx.moveTo(quad[0].x * w, quad[0].y * h);
+    ctx.moveTo(fxRenderQuad[0].x * w, fxRenderQuad[0].y * h);
     for (let i = 1; i < 4; i++) {
       if (sidesShown < i) break;
-      ctx.lineTo(quad[i].x * w, quad[i].y * h);
+      ctx.lineTo(fxRenderQuad[i].x * w, fxRenderQuad[i].y * h);
     }
     if (sidesShown >= 3.9) ctx.closePath();
     ctx.stroke();
@@ -480,7 +482,7 @@ function loop() {
     ctx.fillStyle = "rgba(255,55,95,.9)";
     for (let i = 0; i < Math.min(4, Math.ceil(sidesShown)); i++) {
       ctx.beginPath();
-      ctx.arc(quad[i].x * w, quad[i].y * h, 4, 0, Math.PI * 2);
+      ctx.arc(fxRenderQuad[i].x * w, fxRenderQuad[i].y * h, 4, 0, Math.PI * 2);
       ctx.fill();
     }
     frameEl.textContent = complete ? "LOCK" : `kotak ${Math.round(sidesShown)}/4`;
