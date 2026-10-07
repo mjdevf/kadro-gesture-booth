@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Photo booth gesture — dua tangan L bikin kotak blur, peace buat foto">
+<meta name="description" content="Photo booth gesture — L dua tangan bikin kotak efek, peace countdown buat foto, palm ganti efek, strip 4 foto ala photobooth">
 <title>Kadro — Gesture Photo Booth</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -119,15 +119,25 @@
     transition: opacity .1s;
   }
 
+  #countdown {
+    position: absolute; inset: 0; z-index: 18;
+    display: none; align-items: center; justify-content: center;
+    font-size: 110px; font-weight: 800; letter-spacing: -.03em;
+    color: #fff; text-shadow: 0 6px 44px rgba(255,55,95,.65);
+    pointer-events: none;
+    animation: cdpop .5s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes cdpop { from { opacity: 0; transform: scale(1.35); } }
+
   #guide {
     display: flex; gap: 0; width: calc(100% - 28px); max-width: 620px;
-    padding: 14px 2px 6px;
+    padding: 14px 2px 6px; flex-wrap: wrap;
   }
   #guide .card {
-    flex: 1; display: flex; align-items: flex-start; gap: 11px;
-    padding: 2px 14px;
+    flex: 1 1 150px; display: flex; align-items: flex-start; gap: 11px;
+    padding: 6px 14px;
   }
-  #guide .card:first-child { border-right: 1px solid var(--line); }
+  #guide .card:not(:last-child) { border-right: 1px solid var(--line); }
   #guide .card b { display: block; font-size: 13px; font-weight: 700; margin-bottom: 2px; }
   #guide .card span { font-size: 11px; color: var(--muted); line-height: 1.45; display: block; }
 
@@ -198,13 +208,14 @@
       <circle cx="12" cy="13" r="3.5"/>
     </svg>
     <h2>Nyalain kamera, main pakai tangan</h2>
-    <p>Dua tangan bikin <b style="color:var(--text)">L</b> → kotak + blur. Satu tangan <b style="color:var(--text)">peace</b> → foto.</p>
+    <p>Dua tangan <b style="color:var(--text)">L</b> → kotak + efek. <b style="color:var(--text)">Peace</b> → countdown + foto. <b style="color:var(--text)">Palm</b> → ganti efek.</p>
   </div>
   <div id="hud">
     <span id="g-status">kamera off</span>
     <span id="g-frame">—</span>
   </div>
   <div id="flash"></div>
+  <div id="countdown"></div>
 </div>
 
 <div id="guide">
@@ -220,7 +231,13 @@
       <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
       <circle cx="12" cy="13" r="3.5"/>
     </svg>
-    <div><b>Peace</b><span>satu tangan, telunjuk+tengah naik → foto</span></div>
+    <div><b>Peace</b><span>satu tangan, telunjuk+tengah naik → countdown + foto</span></div>
+  </div>
+  <div class="card">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+    </svg>
+    <div><b>Palm</b><span>telapak terbuka, 5 jari mekar → ganti efek</span></div>
   </div>
 </div>
 
@@ -230,6 +247,7 @@
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:6px;"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
     Foto
   </button>
+  <button id="btn-strip" disabled>Strip 4x</button>
   <button id="btn-download" disabled>Unduh</button>
   <button id="btn-effect" disabled>Efek: Blur</button>
   <button id="btn-debug">Debug</button>
@@ -250,6 +268,8 @@ const btnStart = document.getElementById("btn-start");
 const btnCapture = document.getElementById("btn-capture");
 const btnDownload = document.getElementById("btn-download");
 const btnEffect = document.getElementById("btn-effect");
+const btnStrip = document.getElementById("btn-strip");
+const cdEl = document.getElementById("countdown");
 const btnDebug = document.getElementById("btn-debug");
 const banner = document.getElementById("banner");
 const errBox = document.getElementById("err");
@@ -270,6 +290,10 @@ let photos = [];
 let photoBusy = false;
 let peaceStreak = 0;
 let lGrace = 0; // frame setelah L aktif — peace diblokir
+let countdownActive = false, countdownUntil = 0, countdownBreak = 0, needPeaceBreak = false;
+let palmStreak = 0, palmCooldownUntil = 0;
+let toastText = "", toastUntil = 0;
+let stripActive = false, stripShots = [], stripNextAt = 0;
 let effectMode = 0; // 0 blur, 1 invert, 2 grayscale, 3 pixelate, 4 off
 const EFFECT_NAMES = ["Blur", "Negatif", "B&W", "Pixel", "Off"];
 const EFFECT_FILTERS = ["blur(12px)", "invert(1)", "grayscale(1)", "none", "none"];
@@ -428,13 +452,76 @@ function loop() {
     lGrace--;
   }
 
-  // trigger foto: peace stabil 10 frame, ga ada L baru-baru ini, + cooldown
-  if (peace && lGrace === 0) { peaceStreak++; }
-  else { peaceStreak = 0; }
-  if (peaceStreak === 10 && !photoBusy && !locked) captureNow();
+  // palm terbuka (1 tangan, 5 jari mekar) = ganti efek, hands-free
+  const palm = hands.length === 1 && openPalm(hands[0]);
+  if (palm && performance.now() > palmCooldownUntil) palmStreak++;
+  else if (!palm) palmStreak = 0;
+  if (palmStreak >= 12) {
+    palmStreak = 0;
+    palmCooldownUntil = performance.now() + 2000;
+    effectMode = (effectMode + 1) % EFFECT_NAMES.length;
+    btnEffect.textContent = "Efek: " + EFFECT_NAMES[effectMode];
+    toastText = "efek: " + EFFECT_NAMES[effectMode];
+    toastUntil = performance.now() + 1500;
+  }
+
+  // trigger foto: peace stabil 10 frame → countdown 1.5 dtk → jepret (sempat pose)
+  // batal otomatis kalau tangan turun di tengah countdown;
+  // tiap jepret butuh turunin tangan dulu (anti rentetan)
+  if (!peace) {
+    peaceStreak = 0;
+    needPeaceBreak = false;
+  } else if (!stripActive && lGrace === 0 && !photoBusy && !locked && !countdownActive && !needPeaceBreak) {
+    peaceStreak++;
+  }
+  if (peaceStreak >= 10 && !countdownActive && !stripActive) {
+    countdownActive = true;
+    countdownBreak = 0;
+    needPeaceBreak = true;
+    countdownUntil = performance.now() + 1500;
+  }
+  if (countdownActive && !stripActive) {
+    const remain = countdownUntil - performance.now();
+    if (!peace) countdownBreak++; else countdownBreak = 0;
+    if (countdownBreak > 8) {
+      countdownActive = false; hideCountdown(); peaceStreak = 0;
+    } else if (remain <= 0) {
+      countdownActive = false; hideCountdown(); peaceStreak = 0;
+      captureNow();
+    } else {
+      showCountdown(Math.ceil(remain / 500));
+    }
+  }
+
+  // mode strip: 4x jepret otomatis tiap 3 dtk
+  if (stripActive) {
+    if (stripShots.length >= 4) {
+      finishStrip();
+    } else {
+      const remain = stripNextAt - performance.now();
+      if (remain <= 0) {
+        const flash = document.getElementById("flash");
+        flash.style.opacity = "0.9";
+        setTimeout(() => { flash.style.opacity = "0"; }, 150);
+        beep(880, 0.12);
+        stripShots.push(renderPhotoCanvas());
+        if (stripShots.length >= 4) {
+          finishStrip();
+        } else {
+          btnStrip.textContent = `Strip ${stripShots.length + 1}/4…`;
+          stripNextAt = performance.now() + 3000;
+          hideCountdown();
+        }
+      } else {
+        showCountdown(Math.ceil(remain / 1000));
+      }
+    }
+  }
+
   btnCapture.disabled = !running;
   btnDownload.disabled = photos.length === 0;
   btnEffect.disabled = !running;
+  btnStrip.disabled = !running || stripActive;
 
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(video, 0, 0, w, h);
@@ -509,11 +596,20 @@ function loop() {
         ctx.fill();
       }
     }
-    frameEl.textContent = peace
-      ? (photoBusy ? "memotret…" : "peace — foto!")
-      : hands.length >= 2
-        ? "2 tangan L — diam sebentar"
-        : `terlihat ${dbg.hands} tangan`;
+    if (performance.now() < toastUntil) frameEl.textContent = toastText;
+    else if (countdownActive) frameEl.textContent = "siap-siap…";
+    else frameEl.textContent = peace
+      ? (photoBusy ? "memotret…" : "peace — tahan, foto!")
+      : palm
+        ? "palm — ganti efek!"
+        : hands.length >= 2
+          ? "2 tangan L — diam sebentar"
+          : `terlihat ${dbg.hands} tangan`;
+    frameEl.classList.remove("locked");
+  }
+
+  if (stripActive) {
+    frameEl.textContent = `strip ${Math.min(4, stripShots.length + 1)}/4 — pose!`;
     frameEl.classList.remove("locked");
   }
 
@@ -535,14 +631,38 @@ function renderDebug() {
     `peace: ${dbg.peace} | locked: ${locked} | streak: ${validStreak}/${invalidStreak}${dbg.err ? " | err: " + dbg.err : ""}`;
 }
 
-// --- foto ---
-function captureNow() {
-  if (photoBusy || !running) return;
-  photoBusy = true;
-  const flash = document.getElementById("flash");
-  flash.style.opacity = "0.9";
-  setTimeout(() => { flash.style.opacity = "0"; }, 150);
+// --- audio (shutter + countdown, tanpa file) ---
+let audioCtx = null;
+function beep(freq = 880, dur = 0.12) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + dur);
+  } catch (e) { /* audio opsional */ }
+}
 
+// --- countdown overlay ---
+function showCountdown(n) {
+  cdEl.style.display = "flex";
+  const t = String(n);
+  if (cdEl.textContent !== t) { cdEl.textContent = t; beep(660, 0.08); }
+}
+function hideCountdown() { cdEl.style.display = "none"; cdEl.textContent = ""; }
+
+// palm terbuka: 4 jari extended + jempol mekar jauh dari kelingking
+function openPalm(lm) {
+  const spread = dist(lm[4], lm[20]) > dist(lm[0], lm[9]) * 1.2;
+  return spread && ext(lm, 8, 6) && ext(lm, 12, 10) && ext(lm, 16, 14) && ext(lm, 20, 18);
+}
+
+// --- foto ---
+// render 1 frame: mirror (samain preview) + efek quad + watermark
+function renderPhotoCanvas() {
   // reconstruct: kalau efek L baru aja aktif (quad fresh < 2.5s lalu),
   // render ulang efek di quad itu ke frame sekarang → foto include box+efek
   const w = canvas.width, h = canvas.height;
@@ -552,26 +672,42 @@ function captureNow() {
   const snap = document.createElement("canvas");
   snap.width = w; snap.height = h;
   const sctx = snap.getContext("2d");
+  // mirror horizontal biar hasil = preview (preview di-flip via CSS)
+  sctx.save();
+  sctx.translate(w, 0); sctx.scale(-1, 1);
   sctx.drawImage(video, 0, 0, w, h);
+  sctx.restore();
   if (fxQuad && effectMode !== 4) {
+    // quad landmark = koordinat video asli → mirror x biar nempel pas foto
+    const mq = fxQuad.map(p => ({ x: 1 - p.x, y: p.y }));
     const b = document.createElement("canvas");
     b.width = w; b.height = h;
     const b2 = b.getContext("2d");
-    b2.filter = EFFECT_FILTERS[effectMode];
-    b2.drawImage(video, 0, 0, w, h);
-    b2.filter = "none";
     if (effectMode === 3) {
-      b2.clearRect(0, 0, w, h);
-      b2.imageSmoothingEnabled = false;
+      // pixelate: downscale dulu di kanvas kecil, upscale tanpa smoothing
       const blk = 12;
-      b2.drawImage(video, 0, 0, Math.max(1, w / blk), Math.max(1, h / blk));
-      b2.drawImage(b, 0, 0, Math.max(1, w / blk), Math.max(1, h / blk), 0, 0, w, h);
+      const t = document.createElement("canvas");
+      t.width = Math.max(1, Math.floor(w / blk));
+      t.height = Math.max(1, Math.floor(h / blk));
+      t.getContext("2d").drawImage(video, 0, 0, t.width, t.height);
+      b2.save();
+      b2.translate(w, 0); b2.scale(-1, 1);
+      b2.imageSmoothingEnabled = false;
+      b2.drawImage(t, 0, 0, t.width, t.height, 0, 0, w, h);
+      b2.restore();
       b2.imageSmoothingEnabled = true;
+    } else {
+      b2.save();
+      b2.translate(w, 0); b2.scale(-1, 1);
+      b2.filter = EFFECT_FILTERS[effectMode];
+      b2.drawImage(video, 0, 0, w, h);
+      b2.restore();
+      b2.filter = "none";
     }
     b2.save();
     b2.beginPath();
-    b2.moveTo(fxQuad[0].x * w, fxQuad[0].y * h);
-    for (let i = 1; i < 4; i++) b2.lineTo(fxQuad[i].x * w, fxQuad[i].y * h);
+    b2.moveTo(mq[0].x * w, mq[0].y * h);
+    for (let i = 1; i < 4; i++) b2.lineTo(mq[i].x * w, mq[i].y * h);
     b2.closePath();
     b2.globalCompositeOperation = "destination-in";
     b2.fillStyle = "#fff";
@@ -582,20 +718,44 @@ function captureNow() {
     sctx.strokeStyle = "rgba(255,55,95,.8)";
     sctx.lineWidth = 3;
     sctx.beginPath();
-    sctx.moveTo(fxQuad[0].x * w, fxQuad[0].y * h);
-    for (let i = 1; i < 4; i++) sctx.lineTo(fxQuad[i].x * w, fxQuad[i].y * h);
+    sctx.moveTo(mq[0].x * w, mq[0].y * h);
+    for (let i = 1; i < 4; i++) sctx.lineTo(mq[i].x * w, mq[i].y * h);
     sctx.closePath();
     sctx.stroke();
     lastFxQuad = null; // sekali pakai — foto berikutnya clean
   }
-  const url = snap.toDataURL("image/jpeg", 0.92);
+  // watermark kecil ala photobooth
+  try {
+    const label = "KADRO • " + new Date().toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+    sctx.font = "600 20px system-ui, sans-serif";
+    const tw = sctx.measureText(label).width;
+    const px = 14, py = 10;
+    sctx.fillStyle = "rgba(0,0,0,.45)";
+    sctx.fillRect(w - tw - px * 2, h - 20 - py * 2, tw + px * 2, 20 + py * 2);
+    sctx.fillStyle = "rgba(255,255,255,.9)";
+    sctx.fillText(label, w - tw - px, h - py - 4);
+  } catch (e) { /* watermark opsional */ }
+  return snap;
+}
+
+function pushPhoto(url) {
   photos.push(url);
-  const cnt = document.getElementById("g-count");
-  cnt.textContent = photos.length + " foto";
+  document.getElementById("g-count").textContent = photos.length + " foto";
   const img = document.createElement("img");
   img.src = url;
+  img.className = "thumb";
   img.onclick = () => downloadPhoto(url);
   document.getElementById("gallery").appendChild(img);
+}
+
+function captureNow() {
+  if (photoBusy || !running) return;
+  photoBusy = true;
+  const flash = document.getElementById("flash");
+  flash.style.opacity = "0.9";
+  setTimeout(() => { flash.style.opacity = "0"; }, 150);
+  beep(880, 0.12);
+  pushPhoto(renderPhotoCanvas().toDataURL("image/jpeg", 0.92));
   setTimeout(() => { photoBusy = false; }, 1200); // cooldown
 }
 
@@ -604,6 +764,53 @@ function downloadPhoto(url) {
   a.href = url;
   a.download = "booth-" + Date.now() + ".jpg";
   a.click();
+}
+
+// --- photo strip 4x ala photobooth ---
+function startStrip() {
+  if (!running || stripActive) return;
+  countdownActive = false; hideCountdown();
+  peaceStreak = 0;
+  stripActive = true; stripShots = [];
+  stripNextAt = performance.now() + 1500;
+  btnStrip.textContent = "Strip 1/4…";
+  beep(660, 0.1);
+}
+
+function composeStrip(shots) {
+  const pad = 28, gap = 16, footH = 130;
+  const SW = 720;
+  const pw = SW - pad * 2;
+  const ph = Math.round(shots[0].height * (pw / shots[0].width));
+  const strip = document.createElement("canvas");
+  strip.width = SW;
+  strip.height = pad * 2 + (ph + gap) * 4 - gap + footH;
+  const c = strip.getContext("2d");
+  c.fillStyle = "#fff";
+  c.fillRect(0, 0, strip.width, strip.height);
+  shots.forEach((s, i) => {
+    c.drawImage(s, pad, pad + i * (ph + gap), pw, ph);
+  });
+  c.fillStyle = "#111";
+  c.font = "800 44px system-ui, sans-serif";
+  c.textAlign = "center";
+  c.fillText("KADRO", SW / 2, strip.height - footH + 54);
+  c.fillStyle = "#888";
+  c.font = "500 24px system-ui, sans-serif";
+  c.fillText(new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }), SW / 2, strip.height - footH + 90);
+  return strip;
+}
+
+function finishStrip() {
+  stripActive = false;
+  hideCountdown();
+  btnStrip.textContent = "Strip 4x";
+  if (stripShots.length === 4) {
+    pushPhoto(composeStrip(stripShots).toDataURL("image/jpeg", 0.92));
+    beep(880, 0.1);
+    setTimeout(() => beep(1174, 0.15), 140);
+  }
+  stripShots = [];
 }
 
 // --- model + camera ---
@@ -698,11 +905,16 @@ function stop() {
   quad = null; locked = false;
   rawQuad = null; prevRawQuad = null;
   sidesShown = 0;
+  countdownActive = false; peaceStreak = 0;
+  stripActive = false; stripShots = [];
+  hideCountdown();
+  btnStrip.textContent = "Strip 4x";
   document.getElementById("cover").style.display = "";
 }
 
 btnStart.onclick = () => running ? stop() : start();
 btnCapture.onclick = captureNow;
+btnStrip.onclick = startStrip;
 btnEffect.onclick = () => {
   effectMode = (effectMode + 1) % EFFECT_NAMES.length;
   btnEffect.textContent = "Efek: " + EFFECT_NAMES[effectMode];
